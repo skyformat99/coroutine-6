@@ -3,6 +3,8 @@
 #include <thread>
 #include <atomic>
 
+#include "smallvector.h"
+#include "spinlock.h"
 #include "readwrite_queue.h"
 #include "coroutine.h"
 
@@ -21,14 +23,15 @@ private:
 public:
     Processor(const uint64_t& num_workers, TaskQueue& task_queue,
             std::atomic<bool>& stop):
-        num_workers_(num_workers), task_queue_(task_queue), stop_(stop) {
+            num_workers_(num_workers), task_queue_(task_queue), stop_(stop) {
         for (auto i = 0U; i < num_workers_; i++) {
             const auto& worker = Create(std::bind(
                     &Processor::ConsumeTask, this));
             workers_.push_back(worker);
         }
     }
-    ~Processor() {}
+    ~Processor() {
+    }
 
     void ConsumeTask() {
         do {
@@ -83,16 +86,17 @@ public:
     ProcessorPool(const uint64_t& num_cores, const uint64_t&
             num_workers_per_core) : num_cores_(num_cores),
             num_workers_per_core_(num_workers_per_core),
-            last_core_(0) {
+            last_core_(0U) {
         for (auto core = 0U; core < num_cores; core++) {
-            task_queues_.emplace_back(new TaskQueue);
-            threads_.push_back(std::unique_ptr<std::thread>(
+            task_queues_.EmplaceBack(new TaskQueue);
+            threads_.PushBack(std::unique_ptr<std::thread>(
                 new std::thread([this, core]{
                     std::shared_ptr<Processor> processor(
                             new Processor(
                                 num_workers_per_core_,
                                 *task_queues_[core], stop_)
                     );
+                    processors_.EmplaceBack(processor);
                     processor->Run();
                 }))
             );
@@ -109,17 +113,21 @@ public:
     }
     void AddTask(const Task& task) {
         // add task in a round-robin manner
+        task_lock_.lock();
         last_core_ = (last_core_ + 1) % num_cores_;
-        task_queues_[last_core_]->Push(task);
+        const auto last_core = last_core_;
+        task_lock_.unlock();
+        task_queues_[last_core]->Push(task);
     }
 private:
     uint64_t num_cores_;
     uint64_t num_workers_per_core_;
     uint64_t last_core_;
+    SpinLock task_lock_;
     std::atomic<bool> stop_;
-    std::vector<std::unique_ptr<TaskQueue>> task_queues_;
-    std::vector<std::unique_ptr<std::thread>> threads_;
-    std::vector<std::shared_ptr<Processor>> processors_;
+    SmallVector<std::unique_ptr<TaskQueue>> task_queues_;
+    SmallVector<std::unique_ptr<std::thread>> threads_;
+    SmallVector<std::shared_ptr<Processor>> processors_;
 };
 }  // namespace coro
 
