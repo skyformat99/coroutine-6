@@ -112,7 +112,6 @@ inline void __stdcall Entry(LPVOID lpParameter) {
 
 inline int Resume(routine_t id) {
     assert(ordinator.current == 0);
-
     Routine *routine = ordinator.routines[id - 1];
     if (routine == nullptr)
         return -1;
@@ -256,6 +255,7 @@ inline void Entry() {
 }
 
 inline int Resume(routine_t id) {
+    //LOG(INFO) << id;
     assert(ordinator.current == 0);
 
     Routine* routine = ordinator.routines[id - 1];
@@ -335,61 +335,65 @@ template<typename Type>
 class Channel {
 public:
     Channel() {
-        _taker = 0;
+        taker_ = 0;
     }
 
     Channel(routine_t id) {
-        _taker = id;
+        taker_ = id;
     }
 
     inline void Consumer(routine_t id) {
-        _taker = id;
+        taker_ = id;
     }
 
     inline void Push(const Type &obj) {
-        _list.push_back(obj);
-        if (_taker && _taker != Current())
-            Resume(_taker);
+        list_.push_back(obj);
+        if (taker_ && taker_ != Current())
+            Resume(taker_);
     }
 
     inline void Push(Type &&obj) {
-        _list.push_back(std::move(obj));
-        if (_taker && _taker != Current())
-            Resume(_taker);
+        list_.push_back(std::move(obj));
+        if (taker_ && taker_ != Current())
+            Resume(taker_);
     }
 
-    inline Type Pop() {
-        if (!_taker)
-            _taker = Current();
-
-        while (_list.empty())
+    inline bool Pop(Type& obj) {
+        if (!taker_)
+            taker_ = Current();
+        while (list_.empty() && !closed_.load(std::memory_order_release))
             Yield();
-
-        Type obj = std::move(_list.front());
-        _list.pop_front();
-        return std::move(obj);
+        if (list_.empty() && closed_.load(std::memory_order_release)) {
+            return false;
+        }
+        obj = std::move(list_.front());
+        list_.pop_front();
+        return true;
     }
-
+    inline void Close() {
+        closed_.store(true, std::memory_order_release);
+    }
     inline void Clear() {
-        _list.clear();
+        list_.clear();
     }
 
     inline void Touch() {
-        if (_taker && _taker != Current())
-            Resume(_taker);
+        if (taker_ && taker_ != Current())
+            Resume(taker_);
     }
 
-    inline size_t size() {
-        return _list.size();
+    inline size_t Size() {
+        return list_.size();
     }
 
-    inline bool empty() {
-        return _list.empty();
+    inline bool IsEmpty() {
+        return list_.empty();
     }
 
 private:
-    std::list<Type> _list;
-    routine_t _taker;
+    std::list<Type> list_;
+    routine_t taker_;
+    std::atomic<bool> closed_;
 };
 
 }
